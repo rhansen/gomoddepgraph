@@ -1,0 +1,346 @@
+.TH gomoddepgraph 1 "%DATE%" "gomoddepgraph %VERSION%"
+.SH NAME
+gomoddepgraph \- print a dependency graph for a given Go module
+.SH SYNOPSIS
+.B "gomoddepgraph"
+.RI [ option \|.\|.\|.\&]
+.IR path [\c
+.B @\c
+.IR version ]
+.SH DESCRIPTION
+.P
+The
+.B gomoddepgraph
+utility resolves a Go module's requirements to a selected set of dependencies and prints their
+relationships.
+.SS "Processing Steps"
+.P
+This utility performs the following steps:
+.RS
+.nr step 0 1
+.IP \n+[step].
+Collect the requirements and build a requirement graph.
+The algorithm used for this step is controlled by the
+.B --requirements
+option.
+.IP \n+[step].
+Optionally "unify" the requirement versions in the requirement graph.
+This is enabled by passing the
+.B -u
+option.
+.IP \n+[step].
+Select a specific set of dependencies that satisfy the given root module's requirements and the
+selected set's own requirements.
+The algorithm used for this step is controlled by the
+.B --resolver
+option.
+The selected dependencies form a dependency graph.
+.IP \n+[step].
+Print the dependency graph to standard output.
+The output format is controlled by the
+.B --format
+option.
+.RE
+.SS "Surprise Dependencies"
+.P
+The
+.B tree
+and
+.B dot
+output formats indicate whether a dependency is a direct dependency or a "surprise" dependency.
+A surprise dependency is a dependency that satisfies an immediate indirect requirement (a
+requirement in go.mod marked with the special
+.B "// indirect"
+comment) but the dependency is not also a dependency of a direct dependency.
+By definition, an indirect requirement is not directly required by the module itself, so the fact
+that the dependency does not appear as a dependency of another dependency is surprising.
+.P
+Surprise dependencies can appear for several reasons, including:
+.RS
+.IP \(bu
+The surprise dependency is needed to satisfy a requirement of a direct requirement, but the direct
+requirement's own requirements have been pruned from the requirement graph.
+See <\c
+.UR https://\:go\:.dev/\:ref/\:mod#graph\-pruning
+.UE >.
+.IP \(bu
+The developer forgot to run
+.B "go mod tidy"
+after adding a direct requirement.
+(The
+.B "go get"
+command adds an
+.B "// indirect"
+comment to new requirements;
+.B "go mod tidy"
+removes that comment if the requirement is direct.)
+.IP \(bu
+One of the module's other dependencies is newer than the corresponding requirement (due to a
+requirement for the newer version elsewhere in the requirement graph), and the older required
+version depends on the surprise dependency but the newer selected version does not.
+.IP \(bu
+A direct dependency is a synthetic module and the surprise dependency was selected to satisfy a
+synthesized indirect requirement for that synthetic module.
+See <\c
+.UR https://\:go\:.dev/\:ref/\:mod#non\-module\-compat
+.UE >.
+.IP \(bu
+The surprise dependency provides or is needed by a tool; see <\c
+.UR https://\:go\:.dev/\:doc/\:modules/\:managing\-dependencies#tools
+.UE >.
+(The
+.B "go get -tool"
+command marks a tool's module as an indirect requirement and the
+.B "go mod tidy"
+command keeps it marked as indirect.)
+.RE
+.SH OPTIONS
+.TP
+.BI --color= mode
+Colorize the output according to
+.IR mode .
+Valid modes:
+.RS
+.TP
+.BR auto\~ (default)
+Enable colorization if standard output is a terminal, disable it otherwise.
+.TP
+.B always
+Enable colorization even if standard output is not a terminal.
+.TP
+.B never
+Disable colorization.
+.RE
+.TP
+.BI --format= mode
+Print the dependency graph according to the given
+.IR mode .
+Valid modes:
+.RS
+.TP
+.BR tree\~ (default)
+Print the dependency graph as an indented tree of module names and versions.
+For brevity, and to avoid infinite recursion, a module that has been previously printed does not
+have its dependencies printed again.
+The specific format is subject to change.
+.TP
+.B raw
+Print the complete selected set of modules (including the root module), one per line and ordered by
+module path.
+.TP
+.B dot
+Output the graph in Graphviz DOT language <\c
+.UR https://\:graphviz\:.org/\:doc/\:info/\:lang.html
+.UE >.
+The specific format is subject to change.
+.RE
+.TP
+.B -h
+.TQ
+.B --help
+Print usage information and exit.
+.TP
+.B --man
+Display this manual and exit.
+.TP
+.B -q
+Decrease log verbosity.  May be repeated for decreased verbosity.
+.TP
+.BI --requirements= mode
+Generate the requirement graph according to the given
+.IR mode .
+Valid modes:
+.RS
+.IP \c
+.BR go\~ (default)
+Use the output of
+.B "go mod graph"
+combined with go.mod parsing (to determine which requirements have an
+.B "// indirect"
+comment).
+As of Go 1.25, this produces a graph with some requirements pruned <\c
+.UR https://\:go\:.dev/\:ref/\:mod#graph\-pruning
+.UE >.
+.IP \c
+.BR complete
+Build a complete requirement graph by recursively processing the requirements listed in go.mod.
+For complex modules this can result in a large requirement graph that takes a long time to process
+(the go.mod of every module in the transitive closure would need to be downloaded and processed).
+See the
+.B -u
+(unify) option to reduce the size of the graph.
+Implies
+.B --resolver=mvs
+if the resolver is currently
+.BR go .
+.RE
+.TP
+.BI --resolver= mode
+Resolve the requirement graph to a dependency graph according to the given
+.IR mode .
+Valid modes:
+.RS
+.TP
+.BR go\~ (default)
+Use Go's built-in dependency resolver by processing the output of
+.BR "go list -m all" .
+This is only supported with
+.B --requirements=go
+and no requirement version unification
+.RB ( -u ).
+As of v1.25, Go uses the Minimal Version Selection (MVS) algorithm; see <\c
+.UR https://\:go\:.dev/\:ref/\:mod#minimal\-version\-selection
+.UE >.
+.TP
+.B mvs
+This is a reimplementation of Go's MVS implementation.
+It should behave the same as
+.B --resolver=go
+except it works with the
+.B -u
+and
+.B --requirements=complete
+options and its behavior will not change if Go's dependency resolution algorithm changes.
+.TP
+.B sat
+Construct a Boolean satisfiability problem (SAT) and use a SAT solver to select the dependencies.
+No attempt is made to find a "minimal" solution.
+.RE
+.TP
+.B -u
+Unify requirement versions.
+Every requirement version is modified to equal the greatest version seen during a walk of the
+requirement graph.
+This reduces the number of nodes in the requirement graph that are reachable from the root node,
+which reduces the number of go.mod files that must be downloaded and processed during resolution.
+This can significantly speed up dependency resolution of a complete requirement graph for a complex
+module.
+.RS
+.P
+For example, the following requirement graph (rooted at
+.BR A ):
+.P
+.in +4n
+.EX
+.BR A " requires " B " and " C
+.BR B " requires " Dv1.0
+.BR C " requires " Dv1.1
+.BR Dv1.0 " requires " E
+.BR Dv1.1 " requires " F
+.EE
+.in
+.P
+becomes:
+.P
+.in +4n
+.EX
+.BR A " requires " B " and " C
+.BR B " requires " Dv1.1
+.BR C " requires " Dv1.1
+.BR Dv1.1 " requires " F
+.EE
+.in
+.P
+Warning: The resulting requirement graph may change depending on which edges are traversed first
+when walking the input requirement graph.
+Edges are walked in a non-deterministic order, so different invocations of this utility may produce
+different results.
+If reproducibility is important, do not use this option.
+Every different result is complete and correct (the selected set of dependencies satisfy the root
+module's requirements and each others' requirements), but one result may be better than another
+depending on your definition of "better".
+.RE
+.TP
+.B -v
+Increase log verbosity.  May be repeated for increased verbosity.
+.TP
+.B --version
+Print the version and exit.
+.TP
+.IR path [\c
+.BR @\c
+.IR version ]
+The Go module at the root of the graph.
+.I version
+may be a version query such as
+.BR latest .
+If the version part is omitted or if
+.I version
+is the empty string,
+.B latest
+is assumed.
+.SH EXAMPLES
+.P
+Default behavior:
+.P
+.in +4n
+.EX
+$ gomoddepgraph golang.org/x/net@v0.49.0
+golang.org/x/net@v0.49.0
+  golang.org/x/crypto@v0.47.0
+.gcolor black
+.B "    golang.org/x/net@v0.49.0 (repeat)"
+.gcolor
+    golang.org/x/sys@v0.40.0
+    golang.org/x/term@v0.39.0
+.gcolor black
+.B "      golang.org/x/sys@v0.40.0 (repeat)"
+.B "  golang.org/x/sys@v0.40.0 (repeat)"
+.B "  golang.org/x/term@v0.39.0 (repeat)"
+.gcolor
+  golang.org/x/text@v0.33.0
+    golang.org/x/mod@v0.31.0\~\c
+.gcolor cyan
+.B "(surprise indirect)"
+.gcolor
+    golang.org/x/sync@v0.19.0\~\c
+.gcolor cyan
+.B "(surprise indirect)"
+.gcolor
+    golang.org/x/tools@v0.40.0
+.EE
+.in
+.P
+MVS on the complete requirement graph:
+.P
+.in +4n
+.EX
+$ gomoddepgraph --requirements=complete golang.org/x/net@v0.49.0
+golang.org/x/net@v0.49.0
+  golang.org/x/crypto@v0.47.0
+.gcolor black
+.B "    golang.org/x/net@v0.49.0 (repeat)"
+.gcolor
+    golang.org/x/sys@v0.40.0
+    golang.org/x/term@v0.39.0
+.gcolor black
+.B "      golang.org/x/sys@v0.40.0 (repeat)"
+.B "  golang.org/x/sys@v0.40.0 (repeat)"
+.B "  golang.org/x/term@v0.39.0 (repeat)"
+.gcolor
+  golang.org/x/text@v0.33.0
+    golang.org/x/tools@v0.40.0
+      github.com/google/go-cmp@v0.6.0
+      github.com/yuin/goldmark@v1.4.13
+      golang.org/x/mod@v0.31.0
+.gcolor black
+.B "        golang.org/x/tools@v0.40.0 (repeat)"
+.B "      golang.org/x/net@v0.49.0 (repeat)"
+.gcolor
+      golang.org/x/sync@v0.19.0
+      golang.org/x/telemetry@v0.0.0-20251203150158-8fff8a5912fc
+.gcolor black
+.B "        golang.org/x/mod@v0.31.0 (repeat)"
+.B "        golang.org/x/sync@v0.19.0 (repeat)"
+.B "        golang.org/x/sys@v0.40.0 (repeat)"
+.gcolor
+.EE
+.in
+.SH SEE ALSO
+.P
+"Go Modules Reference" <\c
+.UR https://\:go\:.dev/\:ref/\:mod
+.UE >,
+"Minimal Version Selection" by Russ Cox <\c
+.UR https://\:research\:.swtch\:.com/\:vgo\-mvs
+.UE >
