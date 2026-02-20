@@ -309,6 +309,10 @@ func Add(ctx context.Context, proxyDir string, dirHashes, goModHashes map[gmdg.M
 		return err
 	}
 	dirHashes[cfg.ModuleId] = dh
+	// Create the $GOPROXY/<modpath>/@v/<modversion>.ziphash file.
+	if err := fileSave(vb+".ziphash", []byte(dh)); err != nil {
+		return err
+	}
 	slog.DebugContext(ctx, "dir hash", "hash", dh)
 	// Hash go.mod.  This is needed even for synthetic modules.
 	mh, err := dirhash.DefaultHash([]string{"go.mod"}, func(fn string) (io.ReadCloser, error) {
