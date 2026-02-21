@@ -294,55 +294,49 @@ func TestGoModDepGraph(t *testing.T) {
 			ctx := fm.NewTestFakeGoProxy(t).AddAll(tc.fakemods...).Context()
 			cancel := func() {}
 			defer func() { cancel() }()
-			var rgGo, rgComplete RequirementGraph
-			rgGoReady := make(chan struct{})
-			rgCompleteReady := make(chan struct{})
-			rgWait := func(t *testing.T, ch <-chan struct{}, rg *RequirementGraph) RequirementGraph {
-				t.Helper()
-				select {
-				case <-t.Context().Done():
-					t.Fatalf("test context canceled: %v", context.Cause(t.Context()))
-				case <-ctx.Done():
-					t.Fatalf("outer test context canceled: %v", context.Cause(ctx))
-				case <-ch:
-				}
-				if *rg == nil {
-					t.Fatal("failed to generate RequirementGraph")
-				}
-				return *rg
-			}
+			rootId := ParseModuleId(tc.root)
+			rgGo := sync.OnceValues(func() (RequirementGraph, error) {
+				return RequirementsGo(ctx, rootId)
+			})
+			rgComplete := sync.OnceValues(func() (RequirementGraph, error) {
+				var rg RequirementGraph
+				var err error
+				rg, cancel, err = RequirementsComplete(ctx, rootId)
+				return rg, err
+			})
 			t.Run("RequirementsGo", func(t *testing.T) {
 				t.Parallel()
-				var err error
-				rgGo, err = RequirementsGo(ctx, ParseModuleId(tc.root))
-				close(rgGoReady)
+				rg, err := rgGo()
 				if err != nil {
 					t.Fatal(err)
 				}
-				checkReqGraph(ctx, t, rgGo, tc.want_RequirementsGo)
+				checkReqGraph(ctx, t, rg, tc.want_RequirementsGo)
 			})
 			t.Run("RequirementsComplete", func(t *testing.T) {
 				t.Parallel()
-				var err error
-				rgComplete, cancel, err = RequirementsComplete(ctx, ParseModuleId(tc.root))
-				close(rgCompleteReady)
+				rg, err := rgComplete()
 				if err != nil {
 					t.Fatal(err)
 				}
-				checkReqGraph(ctx, t, rgComplete, tc.want_RequirementsComplete)
+				checkReqGraph(ctx, t, rg, tc.want_RequirementsComplete)
 			})
 			t.Run("UnifyRequirements", func(t *testing.T) {
 				t.Parallel()
-				rg := rgWait(t, rgCompleteReady, &rgComplete)
-				rg, err := UnifyRequirements(ctx, rg)
+				rg, err := rgComplete()
 				if err != nil {
+					t.Fatal(err)
+				}
+				if rg, err = UnifyRequirements(ctx, rg); err != nil {
 					t.Fatal(err)
 				}
 				checkReqGraph(ctx, t, rg, tc.want_UnifyRequirements)
 			})
 			t.Run("ResolveGo", func(t *testing.T) {
 				t.Parallel()
-				rg := rgWait(t, rgGoReady, &rgGo)
+				rg, err := rgGo()
+				if err != nil {
+					t.Fatal(err)
+				}
 				dg, err := ResolveGo(ctx, rg)
 				if err != nil {
 					t.Fatal(err)
@@ -351,7 +345,10 @@ func TestGoModDepGraph(t *testing.T) {
 			})
 			t.Run("ResolveMvs", func(t *testing.T) {
 				t.Parallel()
-				rg := rgWait(t, rgCompleteReady, &rgComplete)
+				rg, err := rgComplete()
+				if err != nil {
+					t.Fatal(err)
+				}
 				dg, err := ResolveMvs(ctx, rg)
 				if err != nil {
 					t.Fatal(err)
@@ -360,7 +357,10 @@ func TestGoModDepGraph(t *testing.T) {
 			})
 			t.Run("ResolveSat", func(t *testing.T) {
 				t.Parallel()
-				rg := rgWait(t, rgCompleteReady, &rgComplete)
+				rg, err := rgComplete()
+				if err != nil {
+					t.Fatal(err)
+				}
 				dg, err := ResolveSat(ctx, rg)
 				if err != nil {
 					t.Fatal(err)
