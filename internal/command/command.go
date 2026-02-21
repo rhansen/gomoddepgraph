@@ -58,35 +58,39 @@ func DecodeJsonStream[T any](ctx context.Context, wd string, args ...string) (it
 	var retErr error
 	var cmd *exec.Cmd
 	var out io.ReadCloser
-	return func(yield func(T) bool) {
-			var err error
-			if cmd, out, err = Pipe(ctx, wd, args...); err != nil {
+	done := func() error {
+		if out != nil {
+			if err := out.Close(); retErr == nil {
 				retErr = err
+			}
+			out = nil
+		}
+		if cmd != nil {
+			if err := cmd.Wait(); err != nil && retErr == nil {
+				retErr = fmt.Errorf("command %q failed: %w", strings.Join(args, " "), err)
+			}
+			cmd = nil
+		}
+		return retErr
+	}
+	return func(yield func(T) bool) {
+		defer done() // In case the caller fails to call it.
+		var err error
+		if cmd, out, err = Pipe(ctx, wd, args...); err != nil {
+			retErr = err
+			return
+		}
+		dec := json.NewDecoder(out)
+		for dec.More() {
+			obj := *new(T)
+			if err := dec.Decode(&obj); err != nil {
+				retErr = fmt.Errorf("failed to decode JSON from command %q: %w",
+					strings.Join(args, " "), err)
 				return
 			}
-			dec := json.NewDecoder(out)
-			for dec.More() {
-				obj := *new(T)
-				if err := dec.Decode(&obj); err != nil {
-					retErr = fmt.Errorf("failed to decode JSON from command %q: %w",
-						strings.Join(args, " "), err)
-					return
-				}
-				if !yield(obj) {
-					return
-				}
+			if !yield(obj) {
+				return
 			}
-		}, func() error {
-			if out != nil {
-				if err := out.Close(); retErr == nil {
-					retErr = err
-				}
-			}
-			if cmd != nil {
-				if err := cmd.Wait(); err != nil && retErr == nil {
-					retErr = fmt.Errorf("command %q failed: %w", strings.Join(args, " "), err)
-				}
-			}
-			return retErr
 		}
+	}, done
 }
