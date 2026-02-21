@@ -28,34 +28,49 @@ import (
 // because they must download and process metadata for many more modules.  The size of the graph can
 // be reduced by [UnifyRequirements] (although reproducibility is impacted).
 //
-// Canceling the provided [context.Context] or calling the returned cancel function frees some
-// resources.  Once canceled, in-progress and future calls to [RequirementGraph.Load] might fail.
+// Calling the returned done callback gracefully shuts down a background goroutine, freeing some
+// resources.  Canceling the provided [context.Context] also shuts down, but does so less gracefully
+// and might log a spurious context canceled error.  Once shut down, in-progress and future calls to
+// [RequirementGraph.Load] might fail.
 //
 // [pruned]: https://go.dev/ref/mod#graph-pruning
 // [replace]: https://go.dev/ref/mod#go-mod-file-replace
 // [exclude]: https://go.dev/ref/mod#go-mod-file-exclude
-func RequirementsComplete(ctx context.Context, rootId ModuleId) (RequirementGraph, context.CancelFunc, error) {
+func RequirementsComplete(ctx context.Context, rootId ModuleId) (RequirementGraph, func(), error) {
 	if err := rootId.Check(); err != nil {
 		return nil, func() {}, err
 	}
 	gr, ctx := errgroup.WithContext(ctx)
-	ctx, cancel := context.WithCancel(ctx)
+	shutdown := make(chan struct{})
 	rg := &requirementGraphComplete{
-		root: requirement{rootId},
-		ctx:  ctx,
-		gr:   gr,
-		qCh:  make(chan *loadQ),
+		root:     requirement{rootId},
+		ctx:      ctx,
+		gr:       gr,
+		qCh:      make(chan *loadQ),
+		shutdown: shutdown,
+	}
+	done := func() {
+		select {
+		case <-shutdown:
+			rg.gr.Wait()
+		default:
+			close(shutdown)
+			if err := rg.gr.Wait(); err != nil {
+				slog.WarnContext(ctx, "RequirementsComplete failed to shut down cleanly", "err", err)
+			}
+		}
 	}
 	gr.Go(func() error { return rg.batchify(ctx) })
-	return rg, cancel, nil
+	return rg, done, nil
 }
 
 type requirementGraphComplete struct {
-	root    Requirement
-	immReqs syncmap.Map[Requirement, func() (*requirementGraphReqs, error)]
-	ctx     context.Context
-	gr      *errgroup.Group
-	qCh     chan *loadQ
+	root     Requirement
+	immReqs  syncmap.Map[Requirement, func() (*requirementGraphReqs, error)]
+	ctx      context.Context
+	gr       *errgroup.Group
+	qCh      chan *loadQ
+	shutdown <-chan struct{}
 }
 
 var _ RequirementGraph = (*requirementGraphComplete)(nil)
@@ -118,12 +133,14 @@ func (rg *requirementGraphComplete) load(ctx context.Context, mId ModuleId) (*re
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-rg.ctx.Done():
-		return nil, fmt.Errorf("RequirementsComplete context: %w", context.Cause(rg.ctx))
+		return nil, fmt.Errorf("RequirementsComplete context is done: %w", rg.ctx.Err())
+	case <-rg.shutdown:
+		return nil, fmt.Errorf("RequirementsComplete has been shut down")
 	case rg.qCh <- &loadQ{ctx: ctx, mId: mId, ch: ch}:
 	}
 	var r *loadR
 	// batchify will send a result even if its context is canceled so there's no need to include
-	// rg.ctx.Done() in this select.
+	// rg.ctx.Done() or rg.shutdown in this select.
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -180,6 +197,8 @@ func (rg *requirementGraphComplete) batchify(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-rg.shutdown:
+			return nil
 		case q := <-qCh:
 			bat[q.mId] = q
 			batCh = batChOrig
@@ -198,6 +217,8 @@ func (rg *requirementGraphComplete) batchify(ctx context.Context) error {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
+				case <-rg.shutdown:
+					return nil
 				case bat := <-batChOrig:
 					rg.loadBatch(ctx, bat)
 				}

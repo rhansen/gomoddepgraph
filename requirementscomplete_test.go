@@ -29,7 +29,7 @@ func TestRequirementsComplete_Load_ErrorSelectLoopContextCanceled(t *testing.T) 
 		t.Fatal(err)
 	}
 	cancel()
-	want := regexp.MustCompile(`RequirementsComplete context: context canceled`)
+	want := regexp.MustCompile(`RequirementsComplete context is done: context canceled`)
 	if got := rg.Load(ctx, rg.Root()); got == nil || !want.MatchString(got.Error()) {
 		t.Errorf("got error %q, want error matching %q", got, want)
 	}
