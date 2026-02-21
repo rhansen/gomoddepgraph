@@ -418,13 +418,10 @@ func TestWalkGraph_ContextCancel(t *testing.T) {
 				return maybePause(ctx, ch, nodes[2].Contains(p))
 			}
 			go func() {
-				t.Log("waiting for callbacks to become ready")
 				readyGr.Wait()
-				t.Log("waiting to send testErr")
 				select {
 				case <-ctx.Done():
 				case errCh <- testErr:
-					t.Log("sent testErr")
 				}
 			}()
 			gotErr := walkGraph(t.Context(), "a", nodeVisit, load, edges, edgeVisit)
