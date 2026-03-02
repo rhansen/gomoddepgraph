@@ -166,6 +166,58 @@ func TestGoModDepGraph(t *testing.T) {
 			// want_ResolveSat: ditto,
 		},
 		{
+			desc: "version bump surprise req",
+			root: "example.com/root@v1.0.0",
+			fakemods: [][]fm.Option{
+				{fm.Id("example.com/dep2@v1.0.0")},
+				{fm.Id("example.com/dep2@v1.1.0")},
+				{fm.Id("example.com/dep1@v1.0.0"),
+					fm.Require("example.com/dep2@v1.0.0", false)},
+				{fm.Id("example.com/root@v1.0.0"),
+					// Note that this indirect requirement is for v1.1.0 even though dep1 only requires
+					// v1.0.0.  This makes it a surprise requirement: it is marked as indirect but no other
+					// module in the requirement graph requires this version.
+					fm.Require("example.com/dep2@v1.1.0", true),
+					fm.Require("example.com/dep1@v1.0.0", false)},
+			},
+			want_RequirementsGo: tGraph{
+				"example.com/root@v1.0.0": {
+					"example.com/dep1@v1.0.0": false,
+					"example.com/dep2@v1.1.0": true,
+				},
+				"example.com/dep1@v1.0.0": {
+					"example.com/dep2@v1.0.0": false,
+				},
+				"example.com/dep2@v1.0.0": {},
+				"example.com/dep2@v1.1.0": {},
+			},
+			// want_RequirementsComplete: ditto,
+			want_UnifyRequirements: tGraph{
+				"example.com/root@v1.0.0": {
+					"example.com/dep1@v1.0.0": false,
+					"example.com/dep2@v1.1.0": true,
+				},
+				"example.com/dep1@v1.0.0": {
+					"example.com/dep2@v1.1.0": false,
+				},
+				"example.com/dep2@v1.1.0": {},
+			},
+			want_ResolveGo: tGraph{
+				// The surprise *requirement* for dep2@v1.1.0 does NOT become a surprise *dependency* here
+				// because resolution selects the newer version which appears as a direct dependency of the
+				// direct dependency dep1.
+				"example.com/root@v1.0.0": {
+					"example.com/dep1@v1.0.0": false,
+				},
+				"example.com/dep1@v1.0.0": {
+					"example.com/dep2@v1.1.0": false,
+				},
+				"example.com/dep2@v1.1.0": {},
+			},
+			// want_ResolveMvs: ditto,
+			// want_ResolveSat: ditto,
+		},
+		{
 			desc: "cycle",
 			root: "example.com/root@v1.1.0",
 			// A true requirement cycle is not possible without disabling authentication (GOSUMDB=off)
